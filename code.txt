@@ -1,0 +1,59 @@
+/* =====================================================================
+   项目名称：基于弗明汉心脏研究队列的临床数据清洗与基线特征分析
+   主要功能：缺失值处理、逻辑排查、变量分箱（Formatting）、频数分析与可视化
+   ===================================================================== */
+
+/* STEP 1: 自定义格式映射 (对应 Action 中的 PROC FORMAT) */
+proc format;
+    /* 将连续的胆固醇数值转化为临床常用的分类等级 */
+    value chol_sec  low - 199 = '正常 (<200 mg/dL)'
+                    200 - 239 = '边缘升高 (200-239 mg/dL)'
+                    240 - high = '高胆固醇 (>=240 mg/dL)'
+                    . = '数据缺失';
+                    
+    /* 规范化性别显示 */
+    value $sex_fmt  'Female' = '女性'
+                    'Male'   = '男性';
+run;
+
+/* STEP 2: DATA 步清洗：缺失值合规填补与逻辑差错排查 */
+data processed_heart;
+    set sashelp.heart;
+    
+    /* 1. 逻辑错漏排查：临床试验中，若基线年龄大于死亡年龄，或年龄为负数，显然属于逻辑冲突，需剔除 */
+    if AgeAtStart < 0 then delete;
+    if Status = 'Dead' and (AgeAtStart > AgeAtDeath) then delete;
+    
+    /* 2. 缺失值处理：收缩压（Systolic）缺失时，用该研究的行业中位数 130 进行合规填补 */
+    if Systolic = . then Systolic = 130;
+    
+    /* 3. 特征工程：计算脉压差（收缩压 - 舒张压），作为新的临床评估指标 */
+    Pulse_Pressure = Systolic - Diastolic;
+    
+    /* 标签规范化应用 */
+    format Sex $sex_fmt. Cholesterol chol_sec.;
+run;
+
+
+/* STEP 3: 数据描述性统计与基线特征分析 (对应 Action 中的 PROC MEANS / FREQ) */
+/* 1. 查看清洗后连续变量（年龄、体重、脉压差）的整体分布和缺失情况 */
+proc means data=processed_heart mean median min max nmiss;
+    var AgeAtStart Weight Pulse_Pressure;
+    title "受试者连续变量基线特征统计 (PROC MEANS)";
+run;
+
+/* 2. 卡方检验：分析不同胆固醇水平与最终生存状态（Status）的相关性 */
+proc freq data=processed_heart;
+    tables Cholesterol * Status / chisq nocol nopercent;
+    title "胆固醇分级与生存状态的相关性分析 (PROC FREQ)";
+run;
+
+
+/* STEP 4: 数据可视化 (对应 Action 中的 PROC SGPLOT) */
+/* 绘制不同性别下，年龄与脉压差的箱线图（Box Plot），用于排查离群值 */
+proc sgplot data=processed_heart;
+    vbox Pulse_Pressure / category=Sex fillattrs=(color=ligr);
+    xaxis label="性别";
+    yaxis label="脉压差 (mmHg)";
+    title "不同性别受试者脉压差基线分布图";
+run;
